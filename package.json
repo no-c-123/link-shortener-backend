@@ -1,0 +1,21 @@
+{
+  "name": "link-shortener-backend",
+  "version": "1.0.0",
+  "description": "A Node.js/Express backend service for URL shortening with automatic port detection and Supabase database integration",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["url-shortener", "express", "supabase", "nodejs", "backend"],
+  "author": "Hector Prieto",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.50.2",
+    "cors": "^2.8.5",
+    "dotenv": "^17.0.1",
+    "express": "^4.18.2"
+  }
+}
