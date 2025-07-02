@@ -42,7 +42,7 @@ app.post('/shorten', async (req, res) => {
             return res.status(500).json({ error: 'Database error', details: error.message });
         }
 
-        res.json({ shortUrl: `http://localhost:${PORT}/${code}` });
+        res.json({ shortUrl: `https://link-shortener-backend-production.up.railway.app/${code}` });
     } catch (err) {
         console.error('Unexpected backend error:', err); // ✅ Catch any other errors
         res.status(500).json({ error: 'Unexpected server error', details: err.message });
