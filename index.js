@@ -4,11 +4,11 @@ const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
-const PORT = process.env.PORT || 5001; // Fixed port
+const PORT = process.env.PORT || 5001;
 
 // ✅ CORS setup
 app.use(cors({
-    origin: 'http://localhost:4321',
+    origin: '*',
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type'],
 }));
@@ -23,28 +23,26 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 // ✅ Save to Database
 app.post('/shorten', async (req, res) => {
-    const { originalUrl } = req.body;
-
-    console.log('Request body:', req.body); // ✅ Check what the frontend is sending
+    const { originalUrl, customCode } = req.body;
+    const code = customCode || Math.random().toString(36).substring(2, 7);
 
     if (!originalUrl) {
-        console.error('Missing URL in request');
         return res.status(400).json({ error: 'Missing URL' });
     }
 
-    const code = Math.random().toString(36).substring(2, 7);
-
     try {
-        const { error } = await supabase.from('links').insert([{ code, original: originalUrl }]);
+        const { error } = await supabase
+            .from('links')
+            .insert([{ code, original: originalUrl }]);
 
         if (error) {
-            console.error('Supabase insert error:', error); // ✅ Log the database error
             return res.status(500).json({ error: 'Database error', details: error.message });
         }
 
-        res.json({ shortUrl: `https://link-shortener-backend-production.up.railway.app/${code}` });
+        res.json({
+            shortUrl: `https://link-shortener-backend-production.up.railway.app/${code}`,
+        });
     } catch (err) {
-        console.error('Unexpected backend error:', err); // ✅ Catch any other errors
         res.status(500).json({ error: 'Unexpected server error', details: err.message });
     }
 });
@@ -53,11 +51,37 @@ app.post('/shorten', async (req, res) => {
 app.get('/:code', async (req, res) => {
     const { code } = req.params;
 
-    const { data, error } = await supabase.from('links').select('original').eq('code', code).single();
+    const { data, error } = await supabase
+        .from('links')
+        .select('original, click_count')
+        .eq('code', code)
+        .single();
 
     if (error || !data) return res.status(404).send('Link not found');
 
+    await supabase
+        .from('links')
+        .update({ click_count: (data.click_count ?? 0) + 1})
+        .eq('code', code);
+
+
     res.redirect(data.original);
+});
+
+app.get('/info/:code', async (req, res) => {
+    const { code } = req.params;
+
+    const { data, error } = await supabase
+        .from('links')
+        .select('*')
+        .eq('code', code)
+        .single();
+
+    if (error || !data) {
+        return res.status(404).json({ error: 'Link not found' });
+    }
+
+    res.json(data);
 });
 
 // ✅ Start Server
