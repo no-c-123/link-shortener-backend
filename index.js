@@ -32,36 +32,40 @@ const supabase = createClient(
 
 // Create short link
 app.post('/shorten', async (req, res) => {
-  const { originalUrl, customCode } = req.body;
-  const code = customCode || Math.random().toString(36).substring(2, 7);
-
-  if (!originalUrl) {
-    return res.status(400).json({ error: 'Missing URL' });
-  }
-
-  try {
-    const { error } = await supabase
-      .from('links')
-      .insert([{ code, original: originalUrl }]);
-
-    if (error) {
-      return res.status(500).json({
-        error: 'Database error',
-        details: error.message,
+    const { originalUrl, customCode } = req.body;
+    const code = customCode || Math.random().toString(36).substring(2, 7);
+  
+    if (!originalUrl) {
+      return res.status(400).json({ error: 'Missing URL' });
+    }
+  
+    try {
+      // ✅ Insert + return the created row immediately
+      const { data, error } = await supabase
+        .from('links')
+        .insert([{ code, original: originalUrl }])
+        .select()
+        .single();
+  
+      if (error) {
+        return res.status(500).json({
+          error: 'Database error',
+          details: error.message,
+        });
+      }
+  
+      // ✅ Return both short URL and record so frontend has everything
+      res.json({
+        shortUrl: `https://link-shortener-backend-production.up.railway.app/${code}`,
+        linkData: data,
+      });
+    } catch (err) {
+      res.status(500).json({
+        error: 'Unexpected server error',
+        details: err.message,
       });
     }
-
-    res.json({
-      shortUrl: `https://link-shortener-backend-production.up.railway.app/${code}`,
-    });
-  } catch (err) {
-    res.status(500).json({
-      error: 'Unexpected server error',
-      details: err.message,
-    });
-  }
-});
-
+  });
 // Redirect to original URL
 app.get('/:code', async (req, res) => {
   const { code } = req.params;
