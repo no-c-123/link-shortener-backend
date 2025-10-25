@@ -3,22 +3,22 @@ const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
-const PORT = process.env.PORT || 8080; // Railway will inject PORT
+const PORT = process.env.PORT || 8080; // Railway uses its own dynamic port
 
 // ─────────────────────────────
-// ✅ Global CORS + Preflight Handler (must come first)
+// ✅ Global CORS + Preflight Handler
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') {
-    return res.sendStatus(200); // instant preflight reply → no 502
+    return res.sendStatus(200); // immediate preflight reply
   }
   next();
 });
 // ─────────────────────────────
 
-// ✅ JSON parser
+// ✅ Parse JSON
 app.use(express.json());
 
 // ✅ Supabase setup
@@ -62,7 +62,7 @@ app.post('/shorten', async (req, res) => {
   }
 });
 
-// Redirect by code
+// Redirect to original URL
 app.get('/:code', async (req, res) => {
   const { code } = req.params;
 
@@ -82,7 +82,7 @@ app.get('/:code', async (req, res) => {
   res.redirect(data.original);
 });
 
-// Retrieve info
+// Retrieve info about a code
 app.get('/info/:code', async (req, res) => {
   const { code } = req.params;
 
@@ -98,8 +98,17 @@ app.get('/info/:code', async (req, res) => {
 
   res.json(data);
 });
-// ─────────────────────────────
 
+// ─────────────────────────────
+// ✅ Explicit OPTIONS route to fix Railway 502
+app.options('*', (req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  return res.sendStatus(200);
+});
+
+// ─────────────────────────────
 // ✅ Start server
 app.listen(PORT, () => {
   console.log(`Backend running on port ${PORT}`);
