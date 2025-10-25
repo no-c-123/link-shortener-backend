@@ -70,6 +70,7 @@ app.post('/shorten', async (req, res) => {
 app.get('/:code', async (req, res) => {
   const { code } = req.params;
 
+
   const { data, error } = await supabase
     .from('links')
     .select('original, click_count')
@@ -89,6 +90,7 @@ app.get('/:code', async (req, res) => {
 // Retrieve info about a code
 app.get('/info/:code', async (req, res) => {
   const { code } = req.params;
+  console.log(code)
 
   const { data, error } = await supabase
     .from('links')
