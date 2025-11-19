@@ -10,6 +10,12 @@ A Node.js/Express backend service for URL shortening with automatic port detecti
 - ✅ **CORS Support**: Configured for cross-origin requests
 - ✅ **Error Handling**: Comprehensive error handling and logging
 - ✅ **Environment Configuration**: Secure environment variable management
+- 🔒 **Security Features**:
+  - Rate limiting on all endpoints
+  - Input validation and sanitization
+  - URL validation (blocks malicious URLs)
+  - Security headers (Helmet)
+  - Enhanced encryption with proper key validation
 
 ## Tech Stack
 
@@ -35,9 +41,30 @@ npm install
 3. Set up environment variables:
 Create a `.env` file in the root directory with:
 ```env
-PORT=5000
-SUPABASE_URL=your_supabase_url_here
-SUPABASE_ANON_KEY=your_supabase_anon_key_here
+PORT=8080
+NODE_ENV=production
+
+# Supabase Configuration
+SUPABASE_URL=your_supabase_project_url
+SUPABASE_ANON_KEY=your_supabase_anon_key
+
+# Stripe Configuration
+SECRET_STRIPE_PUBLISHABLE_KEY=sk_test_your_stripe_secret_key
+STRIPE_WEBHOOK_SECRET=whsec_your_webhook_secret
+
+# Encryption Key (32 bytes, base64 encoded)
+# Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+ENCRYPTION_KEY=your_32_byte_base64_encryption_key
+
+# Backend URL (for generating short URLs)
+BACKEND_URL=https://link-shortener-backend-production.up.railway.app
+
+# CORS Configuration (comma-separated list of allowed origins)
+ALLOWED_ORIGINS=http://localhost:4321,http://localhost:3000,https://your-production-domain.com
+
+# Stripe Redirect URLs
+STRIPE_SUCCESS_URL=https://your-frontend-domain.com/success
+STRIPE_CANCEL_URL=https://your-frontend-domain.com/cancel
 ```
 
 4. Set up Supabase database:
@@ -96,9 +123,17 @@ curl http://localhost:5000/abc12
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `PORT` | Server port (default: 5000) | No |
+| `PORT` | Server port (default: 8080) | No |
+| `NODE_ENV` | Environment (development/production) | No |
 | `SUPABASE_URL` | Supabase project URL | Yes |
 | `SUPABASE_ANON_KEY` | Supabase anonymous key | Yes |
+| `SECRET_STRIPE_PUBLISHABLE_KEY` | Stripe secret key | Yes |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhook secret | Yes |
+| `ENCRYPTION_KEY` | 32-byte base64 encryption key | Yes |
+| `BACKEND_URL` | Backend URL for short links | No |
+| `ALLOWED_ORIGINS` | Comma-separated CORS origins | No |
+| `STRIPE_SUCCESS_URL` | Stripe success redirect URL | No |
+| `STRIPE_CANCEL_URL` | Stripe cancel redirect URL | No |
 
 ### CORS Configuration
 
@@ -139,6 +174,10 @@ backend/
 - `cors`: Cross-origin resource sharing
 - `@supabase/supabase-js`: Supabase client
 - `dotenv`: Environment variable loading
+- `express-rate-limit`: Rate limiting middleware
+- `helmet`: Security headers middleware
+- `express-validator`: Input validation middleware
+- `stripe`: Stripe payment processing
 
 ## Contributing
 
