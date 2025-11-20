@@ -198,7 +198,7 @@ function encrypt(text) {
     if (key.length !== 32) {
       console.error('ENCRYPTION_KEY is not 32 bytes; encryption failed.');
       return null;
-    }
+    }    
     const iv = crypto.randomBytes(12); // 96-bit IV for GCM
     const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
     const ciphertext = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
@@ -303,6 +303,16 @@ app.post('/shorten',
         // Regenerate if random code exists (very unlikely)
         code = Math.random().toString(36).substring(2, 7).toLowerCase();
       }
+
+      const authHeader = req.headers.authorization;
+      let userId = null;
+      if (authHeader?.startsWith('Bearer ')) {
+        const token = authHeader.substring(7);
+        // Verify token with Supabase
+        const { data: { user } } = await supabase.auth.getUser(token);
+        userId = user?.id || null;
+      }
+
 
       const { data, error } = await supabase
         .from('links')
