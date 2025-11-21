@@ -23,7 +23,7 @@ app.use(helmet({
 // ─────────────────────────────
 // ✅ Global CORS + Preflight Handler
 // ─────────────────────────────
-const allowedOrigins = process.env.ALLOWED_ORIGINS 
+const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',')
   : ['http://localhost:4321', 'http://localhost:3000'];
 
@@ -83,9 +83,9 @@ app.use(generalLimiter);
 const validateRequest = (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    return res.status(400).json({ 
-      error: 'Validation failed', 
-      details: errors.array() 
+    return res.status(400).json({
+      error: 'Validation failed',
+      details: errors.array()
     });
   }
   next();
@@ -104,26 +104,26 @@ function isValidUrl(string) {
     // Block localhost and private IPs (unless in development)
     if (process.env.NODE_ENV === 'production') {
       const hostname = url.hostname.toLowerCase();
-      if (hostname === 'localhost' || 
-          hostname === '127.0.0.1' || 
-          hostname.startsWith('192.168.') ||
-          hostname.startsWith('10.') ||
-          hostname.startsWith('172.16.') ||
-          hostname.startsWith('172.17.') ||
-          hostname.startsWith('172.18.') ||
-          hostname.startsWith('172.19.') ||
-          hostname.startsWith('172.20.') ||
-          hostname.startsWith('172.21.') ||
-          hostname.startsWith('172.22.') ||
-          hostname.startsWith('172.23.') ||
-          hostname.startsWith('172.24.') ||
-          hostname.startsWith('172.25.') ||
-          hostname.startsWith('172.26.') ||
-          hostname.startsWith('172.27.') ||
-          hostname.startsWith('172.28.') ||
-          hostname.startsWith('172.29.') ||
-          hostname.startsWith('172.30.') ||
-          hostname.startsWith('172.31.')) {
+      if (hostname === 'localhost' ||
+        hostname === '127.0.0.1' ||
+        hostname.startsWith('192.168.') ||
+        hostname.startsWith('10.') ||
+        hostname.startsWith('172.16.') ||
+        hostname.startsWith('172.17.') ||
+        hostname.startsWith('172.18.') ||
+        hostname.startsWith('172.19.') ||
+        hostname.startsWith('172.20.') ||
+        hostname.startsWith('172.21.') ||
+        hostname.startsWith('172.22.') ||
+        hostname.startsWith('172.23.') ||
+        hostname.startsWith('172.24.') ||
+        hostname.startsWith('172.25.') ||
+        hostname.startsWith('172.26.') ||
+        hostname.startsWith('172.27.') ||
+        hostname.startsWith('172.28.') ||
+        hostname.startsWith('172.29.') ||
+        hostname.startsWith('172.30.') ||
+        hostname.startsWith('172.31.')) {
         return false;
       }
     }
@@ -152,7 +152,7 @@ function sanitizeCode(code) {
 function validateEnvironment() {
   const required = ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SECRET_STRIPE_PUBLISHABLE_KEY', 'ENCRYPTION_KEY'];
   const missing = required.filter(key => !process.env[key]);
-  
+
   if (missing.length > 0) {
     console.error('❌ Missing required environment variables:', missing.join(', '));
     process.exit(1);
@@ -192,13 +192,13 @@ const stripe = Stripe(process.env.SECRET_STRIPE_PUBLISHABLE_KEY);
 // ─────────────────────────────
 function encrypt(text) {
   if (!text || typeof text !== 'string') return null;
-  
+
   try {
     const key = Buffer.from(process.env.ENCRYPTION_KEY, 'base64');
     if (key.length !== 32) {
       console.error('ENCRYPTION_KEY is not 32 bytes; encryption failed.');
       return null;
-    }    
+    }
     const iv = crypto.randomBytes(12); // 96-bit IV for GCM
     const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
     const ciphertext = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
@@ -213,7 +213,7 @@ function encrypt(text) {
 
 function decrypt(b64) {
   if (!b64 || typeof b64 !== 'string') return null;
-  
+
   try {
     const key = Buffer.from(process.env.ENCRYPTION_KEY, 'base64');
     if (key.length !== 32) return null;
@@ -237,7 +237,7 @@ function decrypt(b64) {
 // ─────────────────────────────
 
 // 1️⃣ Create short link
-app.post('/shorten', 
+app.post('/shorten',
   strictLimiter,
   [
     body('originalUrl')
@@ -263,14 +263,14 @@ app.post('/shorten',
   async (req, res) => {
     try {
       let { originalUrl, customCode } = req.body;
-      
+
       // Sanitize inputs
       originalUrl = sanitizeInput(originalUrl);
-      
+
       // Validate URL again after sanitization
       if (!isValidUrl(originalUrl)) {
-        return res.status(400).json({ 
-          error: 'Invalid URL format. Only http and https URLs are allowed.' 
+        return res.status(400).json({
+          error: 'Invalid URL format. Only http and https URLs are allowed.'
         });
       }
 
@@ -279,8 +279,8 @@ app.post('/shorten',
       if (customCode) {
         code = sanitizeCode(customCode);
         if (!code) {
-          return res.status(400).json({ 
-            error: 'Invalid custom code format' 
+          return res.status(400).json({
+            error: 'Invalid custom code format'
           });
         }
       } else {
@@ -296,27 +296,58 @@ app.post('/shorten',
 
       if (existing) {
         if (customCode) {
-          return res.status(409).json({ 
-            error: 'Custom code already exists' 
+          return res.status(409).json({
+            error: 'Custom code already exists'
           });
         }
         // Regenerate if random code exists (very unlikely)
         code = Math.random().toString(36).substring(2, 7).toLowerCase();
       }
 
-      const authHeader = req.headers.authorization;
+      // Authentication & User Association
       let userId = null;
+      const authHeader = req.headers.authorization;
+      const apiKey = req.headers['x-api-key'];
+
       if (authHeader?.startsWith('Bearer ')) {
         const token = authHeader.substring(7);
-        // Verify token with Supabase
         const { data: { user } } = await supabase.auth.getUser(token);
         userId = user?.id || null;
+      } else if (apiKey) {
+        // Validate API Key
+        // Note: In a real production app, you'd hash the incoming key and compare with stored hash
+        // For this implementation, we'll assume the key is stored directly or we have a way to lookup
+        // Since we defined key_hash in migration, let's assume we are receiving the raw key and need to hash it
+        // BUT for simplicity in this immediate fix, we will check if we can find the key. 
+        // Ideally, we should use a secure hash comparison.
+
+        // Let's assume for now we just look it up directly if we stored it directly, 
+        // or if we stored a hash, we hash this input.
+        // Given the migration said 'key_hash', let's implement a simple hash check.
+        const crypto = require('crypto');
+        const hash = crypto.createHash('sha256').update(apiKey).digest('hex');
+
+        const { data: keyData } = await supabase
+          .from('api_keys')
+          .select('user_id')
+          .eq('key_hash', hash)
+          .single();
+
+        if (keyData) {
+          userId = keyData.user_id;
+          // Update last_used_at
+          await supabase.from('api_keys').update({ last_used_at: new Date() }).eq('key_hash', hash);
+        }
       }
 
+      const insertData = { code, original: originalUrl };
+      if (userId) {
+        insertData.user_id = userId;
+      }
 
       const { data, error } = await supabase
         .from('links')
-        .insert([{ code, original: originalUrl }])
+        .insert([insertData])
         .select()
         .single();
 
@@ -343,6 +374,45 @@ app.post('/shorten',
   }
 );
 
+// 1.5️⃣ Generate API Key
+app.post('/api-key',
+  strictLimiter,
+  async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const token = authHeader.substring(7);
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+
+    if (authError || !user) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const crypto = require('crypto');
+    const rawKey = 'sk_' + crypto.randomBytes(24).toString('hex');
+    const hash = crypto.createHash('sha256').update(rawKey).digest('hex');
+
+    const { data, error } = await supabase
+      .from('api_keys')
+      .insert([{
+        user_id: user.id,
+        key_hash: hash,
+        name: req.body.name || 'Default Key'
+      }])
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error creating API key:', error);
+      return res.status(500).json({ error: 'Failed to create API key' });
+    }
+
+    // Return the raw key ONLY ONCE
+    res.json({ apiKey: rawKey, id: data.id, name: data.name });
+  }
+);
+
 // 2️⃣ Info endpoint (must be before redirect)
 app.get('/info/:code',
   [
@@ -357,7 +427,7 @@ app.get('/info/:code',
     try {
       const { code } = req.params;
       const sanitizedCode = sanitizeCode(code);
-      
+
       if (!sanitizedCode) {
         return res.status(400).json({ error: 'Invalid code format' });
       }
@@ -370,7 +440,7 @@ app.get('/info/:code',
 
       if (error) {
         console.error('Database error:', error);
-        return res.status(500).json({ 
+        return res.status(500).json({
           error: 'Database error',
           details: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
         });
@@ -383,7 +453,7 @@ app.get('/info/:code',
       res.json(data);
     } catch (err) {
       console.error('Unexpected error:', err);
-      res.status(500).json({ 
+      res.status(500).json({
         error: 'Unexpected server error',
         details: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error',
       });
@@ -432,13 +502,13 @@ app.post('/create-payment-intent',
   validateRequest,
   async (req, res) => {
     try {
-      const { 
-        amount, 
-        currency = 'usd', 
-        plan = 'starter', 
-        firstName = '', 
-        lastName = '', 
-        email = '' 
+      const {
+        amount,
+        currency = 'usd',
+        plan = 'starter',
+        firstName = '',
+        lastName = '',
+        email = ''
       } = req.body;
 
       // Sanitize inputs
@@ -465,7 +535,7 @@ app.post('/create-payment-intent',
       });
     } catch (err) {
       console.error('Stripe error:', err.message);
-      res.status(500).json({ 
+      res.status(500).json({
         error: 'Payment processing error',
         details: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error',
       });
@@ -488,7 +558,7 @@ app.post('/create-checkout-session',
     try {
       const { priceId } = req.body;
       const sanitizedPriceId = sanitizeInput(priceId).substring(0, 255);
-      
+
       const session = await stripe.checkout.sessions.create({
         mode: 'subscription',
         line_items: [{ price: sanitizedPriceId, quantity: 1 }],
@@ -499,7 +569,7 @@ app.post('/create-checkout-session',
       res.json({ url: session.url });
     } catch (err) {
       console.error('Stripe session error:', err.message);
-      res.status(500).json({ 
+      res.status(500).json({
         error: 'Session creation error',
         details: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error',
       });
@@ -509,8 +579,8 @@ app.post('/create-checkout-session',
 
 // 5️⃣ Stripe Webhook: verify, then store successful payment in Supabase
 // Use express.raw() ONLY for this route (to validate Stripe signature)
-app.post('/webhook', 
-  express.raw({ type: 'application/json' }), 
+app.post('/webhook',
+  express.raw({ type: 'application/json' }),
   async (req, res) => {
     const sig = req.headers['stripe-signature'];
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -537,7 +607,7 @@ app.post('/webhook',
         if (pi.payment_method) {
           try {
             pm = await stripe.paymentMethods.retrieve(pi.payment_method);
-          } catch {}
+          } catch { }
         }
 
         // Fallback to charge data if available
@@ -619,8 +689,8 @@ app.get('/payments/:email',
 
       if (error) {
         console.error('Database error:', error);
-        return res.status(500).json({ 
-          error: 'Database error', 
+        return res.status(500).json({
+          error: 'Database error',
           details: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
         });
       }
@@ -642,7 +712,7 @@ app.get('/payments/:email',
       res.json(result);
     } catch (err) {
       console.error('Unexpected error:', err);
-      res.status(500).json({ 
+      res.status(500).json({
         error: 'Unexpected server error',
         details: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error',
       });
@@ -664,7 +734,7 @@ app.get('/:code',
     try {
       const { code } = req.params;
       const sanitizedCode = sanitizeCode(code);
-      
+
       if (!sanitizedCode) {
         return res.status(400).send('Invalid code format');
       }
