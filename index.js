@@ -1299,18 +1299,23 @@ app.get('/:code',
         return res.status(400).send('Invalid code format');
       }
 
+      console.log('Looking up link with code:', sanitizedCode);
+
       const { data, error } = await supabase
         .from('links')
         .select('original, click_count, expires_at')
         .eq('code', sanitizedCode)
         .maybeSingle();
 
+      console.log('Query result:', { data, error });
+
       if (error) {
         console.error('Supabase error:', error);
-        return res.status(500).send('Database error');
+        return res.status(500).send(`Database error: ${error.message}`);
       }
 
       if (!data) {
+        console.log('Link not found for code:', sanitizedCode);
         return res.status(404).send('Link not found');
       }
 
