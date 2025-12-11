@@ -177,9 +177,10 @@ validateEnvironment();
 // ─────────────────────────────
 // ✅ Supabase Setup
 // ─────────────────────────────
+// Use service role key for backend operations to bypass RLS
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
 );
 
 // ─────────────────────────────
@@ -1084,20 +1085,31 @@ app.delete('/links/:id',
       }
 
       // Delete the link
-      const { error } = await supabase
+      console.log('Attempting to delete link from database:', id);
+      const { data: deletedData, error } = await supabase
         .from('links')
         .delete()
-        .eq('id', id);
+        .eq('id', id)
+        .select();
+
+      console.log('Delete result:', { deletedData, error });
 
       if (error) {
         console.error('Error deleting link:', error);
-        return res.status(500).json({ error: 'Failed to delete link' });
+        return res.status(500).json({ error: 'Failed to delete link', details: error.message });
       }
 
+      if (!deletedData || deletedData.length === 0) {
+        console.error('No rows were deleted');
+        return res.status(500).json({ error: 'Delete operation did not affect any rows' });
+      }
+
+      console.log('Successfully deleted link:', deletedData);
       res.json({ 
         success: true, 
         message: 'Link deleted successfully',
-        code: linkData.code 
+        code: linkData.code,
+        deleted: deletedData[0]
       });
     } catch (err) {
       console.error('Unexpected error:', err);
