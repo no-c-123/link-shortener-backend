@@ -413,6 +413,84 @@ app.post('/api-key',
   }
 );
 
+// 1.6️⃣ List API Keys
+app.get('/api-keys',
+  async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const token = authHeader.substring(7);
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+
+    if (authError || !user) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { data, error } = await supabase
+      .from('api_keys')
+      .select('id, name, created_at, last_used_at')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching API keys:', error);
+      return res.status(500).json({ error: 'Failed to fetch API keys' });
+    }
+
+    res.json(data || []);
+  }
+);
+
+// 1.7️⃣ Delete API Key
+app.delete('/api-keys/:id',
+  [
+    param('id').isUUID().withMessage('Invalid API key ID'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const token = authHeader.substring(7);
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+
+    if (authError || !user) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const { id } = req.params;
+
+    // Verify the key belongs to the user before deleting
+    const { data: keyData, error: fetchError } = await supabase
+      .from('api_keys')
+      .select('user_id')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !keyData) {
+      return res.status(404).json({ error: 'API key not found' });
+    }
+
+    if (keyData.user_id !== user.id) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    const { error } = await supabase
+      .from('api_keys')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('Error deleting API key:', error);
+      return res.status(500).json({ error: 'Failed to delete API key' });
+    }
+
+    res.json({ success: true, message: 'API key deleted successfully' });
+  }
+);
+
 // 2️⃣ Info endpoint (must be before redirect)
 app.get('/info/:code',
   [
@@ -720,6 +798,220 @@ app.get('/payments/:email',
   }
 );
 
+// 6.5️⃣ Update Link
+app.patch('/links/:id',
+  [
+    param('id').isUUID().withMessage('Invalid link ID'),
+    body('original')
+      .optional()
+      .isLength({ max: 2048 })
+      .withMessage('URL is too long')
+      .custom((value) => {
+        if (value) {
+          const sanitized = sanitizeInput(value);
+          if (!isValidUrl(sanitized)) {
+            throw new Error('Invalid URL format');
+          }
+        }
+        return true;
+      }),
+    body('expires_at')
+      .optional()
+      .isISO8601()
+      .withMessage('Invalid date format'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader?.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+      const token = authHeader.substring(7);
+      const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+
+      if (authError || !user) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+
+      const { id } = req.params;
+      const updates = {};
+
+      if (req.body.original) {
+        updates.original = sanitizeInput(req.body.original);
+      }
+      if (req.body.expires_at) {
+        updates.expires_at = req.body.expires_at;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: 'No updates provided' });
+      }
+
+      // Verify link belongs to user
+      const { data: linkData, error: fetchError } = await supabase
+        .from('links')
+        .select('user_id')
+        .eq('id', id)
+        .single();
+
+      if (fetchError || !linkData) {
+        return res.status(404).json({ error: 'Link not found' });
+      }
+
+      if (linkData.user_id !== user.id) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      const { data, error } = await supabase
+        .from('links')
+        .update(updates)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Error updating link:', error);
+        return res.status(500).json({ error: 'Failed to update link' });
+      }
+
+      res.json(data);
+    } catch (err) {
+      console.error('Unexpected error:', err);
+      res.status(500).json({
+        error: 'Unexpected server error',
+        details: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error',
+      });
+    }
+  }
+);
+
+// 6.6️⃣ Bulk Shorten
+app.post('/shorten/bulk',
+  strictLimiter,
+  [
+    body('urls')
+      .isArray({ min: 1, max: 100 })
+      .withMessage('Must provide 1-100 URLs'),
+    body('urls.*.originalUrl')
+      .notEmpty()
+      .withMessage('URL is required')
+      .isLength({ max: 2048 })
+      .withMessage('URL is too long'),
+    body('urls.*.customCode')
+      .optional()
+      .isLength({ min: 1, max: 20 })
+      .withMessage('Custom code must be 1-20 characters')
+      .matches(/^[a-zA-Z0-9-]+$/)
+      .withMessage('Custom code can only contain letters, numbers, and hyphens'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      let userId = null;
+
+      if (authHeader?.startsWith('Bearer ')) {
+        const token = authHeader.substring(7);
+        const { data: { user } } = await supabase.auth.getUser(token);
+        userId = user?.id || null;
+      }
+
+      const { urls } = req.body;
+      const results = [];
+      const errors = [];
+
+      for (let i = 0; i < urls.length; i++) {
+        const { originalUrl, customCode } = urls[i];
+        
+        try {
+          // Sanitize and validate URL
+          const sanitizedUrl = sanitizeInput(originalUrl);
+          if (!isValidUrl(sanitizedUrl)) {
+            errors.push({ index: i, error: 'Invalid URL format', url: originalUrl });
+            continue;
+          }
+
+          // Generate or sanitize code
+          let code;
+          if (customCode) {
+            code = sanitizeCode(customCode);
+            if (!code) {
+              errors.push({ index: i, error: 'Invalid custom code', url: originalUrl });
+              continue;
+            }
+          } else {
+            code = Math.random().toString(36).substring(2, 7).toLowerCase();
+          }
+
+          // Check if code exists
+          const { data: existing } = await supabase
+            .from('links')
+            .select('code')
+            .eq('code', code)
+            .maybeSingle();
+
+          if (existing) {
+            if (customCode) {
+              errors.push({ index: i, error: 'Custom code already exists', url: originalUrl });
+              continue;
+            }
+            code = Math.random().toString(36).substring(2, 7).toLowerCase();
+          }
+
+          const insertData = { code, original: sanitizedUrl };
+          if (userId) {
+            insertData.user_id = userId;
+          }
+
+          const { data, error } = await supabase
+            .from('links')
+            .insert([insertData])
+            .select()
+            .single();
+
+          if (error) {
+            errors.push({ index: i, error: 'Database error', url: originalUrl });
+            continue;
+          }
+
+          const baseUrl = process.env.BACKEND_URL || 'https://link-shortener-backend-production.up.railway.app';
+          results.push({
+            index: i,
+            shortUrl: `${baseUrl}/${code}`,
+            linkData: data
+          });
+        } catch (err) {
+          errors.push({ index: i, error: err.message, url: originalUrl });
+        }
+      }
+
+      res.json({
+        success: results.length,
+        failed: errors.length,
+        results,
+        errors
+      });
+    } catch (err) {
+      console.error('Unexpected error:', err);
+      res.status(500).json({
+        error: 'Unexpected server error',
+        details: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error',
+      });
+    }
+  }
+);
+
+// 6.7️⃣ Health Check Endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    environment: process.env.NODE_ENV || 'development'
+  });
+});
+
 // 7️⃣ Redirect (must be last non-catchall before fallback)
 app.get('/:code',
   [
@@ -741,7 +1033,7 @@ app.get('/:code',
 
       const { data, error } = await supabase
         .from('links')
-        .select('original, click_count')
+        .select('original, click_count, expires_at')
         .eq('code', sanitizedCode)
         .maybeSingle();
 
@@ -752,6 +1044,14 @@ app.get('/:code',
 
       if (!data) {
         return res.status(404).send('Link not found');
+      }
+
+      // Check if link has expired
+      if (data.expires_at) {
+        const expiryDate = new Date(data.expires_at);
+        if (expiryDate < new Date()) {
+          return res.status(410).send('This link has expired');
+        }
       }
 
       // Validate the original URL before redirecting
