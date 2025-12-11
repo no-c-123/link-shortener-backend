@@ -32,7 +32,7 @@ app.use((req, res, next) => {
   if (allowedOrigins.includes(origin) || !origin) {
     res.header('Access-Control-Allow-Origin', origin || '*');
   }
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Stripe-Signature, X-Requested-With, Authorization, x-api-key');
   res.header('Access-Control-Allow-Credentials', 'true');
   if (req.method === 'OPTIONS') {
@@ -233,6 +233,100 @@ function decrypt(b64) {
 }
 
 // ─────────────────────────────
+// 🎯 PREMIUM FEATURE HELPERS
+// ─────────────────────────────
+async function getUserSubscription(userId) {
+  if (!userId) return { plan: 'free', status: 'active' };
+  
+  const { data, error } = await supabase
+    .from('user_subscriptions')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .maybeSingle();
+  
+  if (error) {
+    console.error('Error fetching subscription:', error);
+    return { plan: 'free', status: 'active' };
+  }
+  
+  // Check if subscription is expired
+  if (data?.expires_at && new Date(data.expires_at) < new Date()) {
+    // Update status to expired
+    await supabase
+      .from('user_subscriptions')
+      .update({ status: 'expired' })
+      .eq('id', data.id);
+    return { plan: 'free', status: 'expired' };
+  }
+  
+  return data || { plan: 'free', status: 'active' };
+}
+
+async function requiresPremium(req, res, next) {
+  const authHeader = req.headers.authorization;
+  const apiKey = req.headers['x-api-key'];
+  let userId = null;
+
+  // Get user ID from auth token or API key
+  if (authHeader?.startsWith('Bearer ')) {
+    const token = authHeader.substring(7);
+    const { data: { user } } = await supabase.auth.getUser(token);
+    userId = user?.id || null;
+  } else if (apiKey) {
+    const hash = crypto.createHash('sha256').update(apiKey).digest('hex');
+    const { data: keyData } = await supabase
+      .from('api_keys')
+      .select('user_id')
+      .eq('key_hash', hash)
+      .maybeSingle();
+    userId = keyData?.user_id || null;
+  }
+
+  if (!userId) {
+    return res.status(401).json({ 
+      error: 'Authentication required',
+      message: 'Please log in to access premium features'
+    });
+  }
+
+  const subscription = await getUserSubscription(userId);
+  
+  if (subscription.plan === 'free') {
+    return res.status(403).json({ 
+      error: 'Premium feature',
+      message: 'This feature requires a premium subscription. Please upgrade your plan.',
+      currentPlan: 'free'
+    });
+  }
+
+  req.userSubscription = subscription;
+  req.userId = userId;
+  next();
+}
+
+function decrypt(b64) {
+  if (!b64 || typeof b64 !== 'string') return null;
+
+  try {
+    const key = Buffer.from(process.env.ENCRYPTION_KEY, 'base64');
+    if (key.length !== 32) return null;
+    const data = Buffer.from(b64, 'base64');
+    if (data.length < 28) return null; // Minimum size check
+    const iv = data.slice(0, 12);
+    const tag = data.slice(12, 28);
+    const ciphertext = data.slice(28);
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(tag);
+    const plain = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+    return plain.toString('utf8');
+  } catch (err) {
+    console.error('Decryption error:', err.message);
+    return null;
+  }
+}
+
+// ─────────────────────────────
 // ✅ ROUTES
 // ─────────────────────────────
 
@@ -258,11 +352,15 @@ app.post('/shorten',
       .withMessage('Custom code must be between 1 and 20 characters')
       .matches(/^[a-zA-Z0-9-]+$/)
       .withMessage('Custom code can only contain letters, numbers, and hyphens'),
+    body('expiresAt')
+      .optional()
+      .isISO8601()
+      .withMessage('Invalid expiration date format'),
   ],
   validateRequest,
   async (req, res) => {
     try {
-      let { originalUrl, customCode } = req.body;
+      let { originalUrl, customCode, expiresAt } = req.body;
 
       // Sanitize inputs
       originalUrl = sanitizeInput(originalUrl);
@@ -340,9 +438,31 @@ app.post('/shorten',
         }
       }
 
+      // Check if expiration is requested (premium only)
+      if (expiresAt) {
+        if (!userId) {
+          return res.status(401).json({
+            error: 'Authentication required',
+            message: 'Link expiration requires authentication'
+          });
+        }
+        
+        const subscription = await getUserSubscription(userId);
+        if (subscription.plan === 'free') {
+          return res.status(403).json({
+            error: 'Premium feature',
+            message: 'Link expiration is a premium feature. Please upgrade your plan.',
+            currentPlan: 'free'
+          });
+        }
+      }
+
       const insertData = { code, original: originalUrl };
       if (userId) {
         insertData.user_id = userId;
+      }
+      if (expiresAt) {
+        insertData.expires_at = expiresAt;
       }
 
       const { data, error } = await supabase
@@ -734,6 +854,46 @@ app.post('/webhook',
         } else {
           console.log('Payment saved to Supabase:', data?.[0]?.id || 'ok');
         }
+
+        // 🎯 Grant premium access to the user
+        if (payer_email && plan) {
+          try {
+            // Get user ID from email
+            const { data: userData, error: userError } = await supabase.auth.admin.listUsers();
+            const user = userData?.users?.find(u => u.email === payer_email);
+            
+            if (user) {
+              // Calculate expiration (30 days for pro plan, 365 for enterprise)
+              const daysToAdd = plan.toLowerCase() === 'enterprise' ? 365 : 30;
+              const expiresAt = new Date();
+              expiresAt.setDate(expiresAt.getDate() + daysToAdd);
+
+              // Upsert subscription
+              const { error: subError } = await supabase
+                .from('user_subscriptions')
+                .upsert({
+                  user_id: user.id,
+                  plan: plan.toLowerCase(),
+                  status: 'active',
+                  stripe_payment_intent: pi.id,
+                  expires_at: expiresAt.toISOString(),
+                  updated_at: new Date().toISOString()
+                }, {
+                  onConflict: 'user_id'
+                });
+
+              if (subError) {
+                console.error('Error creating subscription:', subError);
+              } else {
+                console.log(`✅ Premium access granted to ${payer_email} (${plan}) until ${expiresAt.toISOString()}`);
+              }
+            } else {
+              console.warn(`User with email ${payer_email} not found in auth system`);
+            }
+          } catch (subErr) {
+            console.error('Error granting premium access:', subErr);
+          }
+        }
       } catch (err) {
         console.error('Error handling payment_intent.succeeded:', err);
       }
@@ -800,6 +960,7 @@ app.get('/payments/:email',
 
 // 6.5️⃣ Update Link
 app.patch('/links/:id',
+  requiresPremium, // 🎯 PREMIUM FEATURE
   [
     param('id').isUUID().withMessage('Invalid link ID'),
     body('original')
@@ -886,8 +1047,71 @@ app.patch('/links/:id',
   }
 );
 
-// 6.6️⃣ Bulk Shorten
+// 6.7️⃣ Delete Link
+app.delete('/links/:id',
+  [
+    param('id').isUUID().withMessage('Invalid link ID'),
+  ],
+  validateRequest,
+  async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader?.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+      const token = authHeader.substring(7);
+      const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+
+      if (authError || !user) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+
+      const { id } = req.params;
+
+      // Verify link belongs to user
+      const { data: linkData, error: fetchError } = await supabase
+        .from('links')
+        .select('user_id, code')
+        .eq('id', id)
+        .single();
+
+      if (fetchError || !linkData) {
+        return res.status(404).json({ error: 'Link not found' });
+      }
+
+      if (linkData.user_id !== user.id) {
+        return res.status(403).json({ error: 'Forbidden: You can only delete your own links' });
+      }
+
+      // Delete the link
+      const { error } = await supabase
+        .from('links')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        console.error('Error deleting link:', error);
+        return res.status(500).json({ error: 'Failed to delete link' });
+      }
+
+      res.json({ 
+        success: true, 
+        message: 'Link deleted successfully',
+        code: linkData.code 
+      });
+    } catch (err) {
+      console.error('Unexpected error:', err);
+      res.status(500).json({
+        error: 'Unexpected server error',
+        details: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error',
+      });
+    }
+  }
+);
+
+// 6.8️⃣ Bulk Shorten
 app.post('/shorten/bulk',
+  requiresPremium, // 🎯 PREMIUM FEATURE
   strictLimiter,
   [
     body('urls')
@@ -908,14 +1132,7 @@ app.post('/shorten/bulk',
   validateRequest,
   async (req, res) => {
     try {
-      const authHeader = req.headers.authorization;
-      let userId = null;
-
-      if (authHeader?.startsWith('Bearer ')) {
-        const token = authHeader.substring(7);
-        const { data: { user } } = await supabase.auth.getUser(token);
-        userId = user?.id || null;
-      }
+      const userId = req.userId; // Set by requiresPremium middleware
 
       const { urls } = req.body;
       const results = [];
@@ -1003,6 +1220,45 @@ app.post('/shorten/bulk',
 );
 
 // 6.7️⃣ Health Check Endpoint
+// 6.8️⃣ Get User Subscription Status
+app.get('/subscription/status',
+  async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader?.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+
+      const token = authHeader.substring(7);
+      const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+
+      if (authError || !user) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+
+      const subscription = await getUserSubscription(user.id);
+
+      res.json({
+        plan: subscription.plan,
+        status: subscription.status,
+        expiresAt: subscription.expires_at || null,
+        features: {
+          linkExpiration: subscription.plan !== 'free',
+          bulkShortening: subscription.plan !== 'free',
+          linkEditing: subscription.plan !== 'free',
+          advancedAnalytics: subscription.plan !== 'free',
+          customBranding: subscription.plan === 'enterprise',
+          prioritySupport: subscription.plan !== 'free'
+        }
+      });
+    } catch (err) {
+      console.error('Error fetching subscription:', err);
+      res.status(500).json({ error: 'Failed to fetch subscription status' });
+    }
+  }
+);
+
+// 6.9️⃣ Health check
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
@@ -1081,8 +1337,8 @@ app.options('*', (req, res) => {
   if (allowedOrigins.includes(origin) || !origin) {
     res.header('Access-Control-Allow-Origin', origin || '*');
   }
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Stripe-Signature, X-Requested-With');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Stripe-Signature, X-Requested-With, Authorization, x-api-key');
   res.header('Access-Control-Allow-Credentials', 'true');
   return res.sendStatus(200);
 });

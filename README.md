@@ -179,6 +179,60 @@ backend/
 - `express-validator`: Input validation middleware
 - `stripe`: Stripe payment processing
 
+## Admin Scripts
+
+For testing premium features without payment, use these admin scripts:
+
+### Grant Premium Access
+```bash
+# Grant Pro plan for 30 days
+node scripts/grant-premium.js admin@example.com pro 30
+
+# Grant Enterprise plan for 365 days
+node scripts/grant-premium.js test@example.com enterprise 365
+
+# Grant "permanent" premium (999999 days)
+node scripts/grant-premium.js dev@example.com pro 999999
+```
+
+**Parameters:**
+- `email` (required): User's registered email address
+- `plan` (optional): `pro` or `enterprise` (default: `pro`)
+- `days` (optional): Number of days until expiration (default: `30`)
+
+### Check Subscription Status
+```bash
+node scripts/check-subscription.js admin@example.com
+```
+
+Shows current plan, expiration date, days remaining, and available features.
+
+### Revoke Premium Access
+```bash
+node scripts/revoke-premium.js admin@example.com
+```
+
+Downgrades user back to free plan.
+
+### Quick Start for Testing
+
+1. **Register a test account** through the frontend or Supabase Auth
+2. **Grant premium access**:
+   ```bash
+   cd backend
+   node scripts/grant-premium.js your-email@example.com pro 365
+   ```
+3. **Test premium features**:
+   - Link expiration: `POST /shorten` with `expiresAt`
+   - Bulk shortening: `POST /shorten/bulk`
+   - Link editing: `PATCH /links/:id`
+4. **Check status anytime**:
+   ```bash
+   node scripts/check-subscription.js your-email@example.com
+   ```
+
+**Note:** These scripts require `SUPABASE_SERVICE_ROLE_KEY` in your `.env` file for admin operations. If not available, they'll fall back to `SUPABASE_ANON_KEY` (may have limited permissions).
+
 ## Contributing
 
 1. Fork the repository
