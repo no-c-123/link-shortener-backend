@@ -556,7 +556,10 @@ app.get('/api-keys',
 
     if (error) {
       console.error('Error fetching API keys:', error);
-      return res.status(500).json({ error: 'Failed to fetch API keys' });
+      return res.status(500).json({ 
+        error: 'Failed to fetch API keys',
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
     }
 
     res.json(data || []);
